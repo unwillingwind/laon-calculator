@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Interactive Mortgage Payment Chart</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 30px;
+    }
+    h2 {
+      margin-bottom: 20px;
+    }
+    .slider-container {
+      margin-bottom: 15px;
+      /* fixed width to allow horizontal arrangement */
+      width: 250px;
+    }
+    #chart {
+      border: 1px solid #ccc;
+      margin-top: 20px;
+    }
+    label {
+      font-weight: bold;
+    }
+    .value-display {
+      margin-left: 8px;
+      font-weight: normal;
+    }
+  </style>
+</head>
+<body>
+  <h2>Interactive Mortgage Payment Calculator</h2>
+  <p>歡迎使用房貸計算機</p>
+
+  <!-- Input for user to manually set the axis maximum -->
+  <div style="margin-top: 10px; margin-bottom: 10px;">
+    <label for="max-axis-input">最大軸值 (月繳金額):</label>
+    <input type="number" id="max-axis-input" min="0" step="1" placeholder="輸入數字，例如 120000" style="width: 150px;" />
+  </div>
+
+  <button id="add-set-btn">新增方案</button>
+  <button id="download-btn" style="margin-left: 10px;">下載圖表</button>
+
+  <!-- Chart is placed above the parameter sets and centered -->
+  <canvas id="chart" width="600" height="400" style="display: block; margin: 20px auto;"></canvas>
+
+  <!-- Container for parameter sets arranged horizontally -->
+  <div id="sets-container" style="display: flex; flex-wrap: nowrap; gap: 20px;"></div>
+
+  <script>
+    // Retrieve the canvas and context for drawing
+    const canvas = document.getElementById('chart');
+    const ctx = canvas.getContext('2d');
+
+    // Array to store loan scenarios
+    const sets = [];
+    // Predefined colors for differentiating bars
+    const colors = ['#3f51b5', '#e91e63', '#4caf50', '#ff9800', '#009688', '#9c27b0', '#ff5722', '#607d8b', '#795548', '#2196f3'];
+    // Keep track of the maximum monthly payment encountered
+    let maxPayment = 0;
+    // Custom maximum value for the axis; if greater than zero, overrides automatic scaling
+    let customMax = 0;
+
+    // Input element for axis maximum
+    const maxAxisInput = document.getElementById('max-axis-input');
+    if (maxAxisInput) {
+      maxAxisInput.addEventListener('input', function() {
+        const val = parseFloat(this.value);
+        if (!isNaN(val) && val > 0) {
+          customMax = val;
+        } else {
+          customMax = 0;
+        }
+        drawChart();
+      });
+    }
+
+    // Download chart as PNG when download button is clicked
+    const downloadBtn = document.getElementById('download-btn');
+    if (downloadBtn) {
+      downloadBtn.addEventListener('click', function() {
+        // Create a temporary link and trigger download
+        const link = document.createElement('a');
+        link.download = 'mortgage_chart.png';
+        link.href = canvas.toDataURL('image/png');
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      });
+    }
+
+    // Compute monthly payment using the amortization formula
+    function computeMonthlyPayment(principal, annualRate, years) {
+      const monthlyRate = annualRate / 12;
+      const n = years * 12;
+      return principal * monthlyRate / (1 - Math.pow(1 + monthlyRate, -n));
+    }
+
+    // Draw the chart showing all scenarios
+    function drawChart() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const marginLeft = 80;
+      const marginBottom = 60;
+      const chartWidth = canvas.width - marginLeft - 40;
+      const chartHeight = canvas.height - marginBottom - 40;
+
+      // Chart max value with cushion; if no sets, avoid division by zero
+      // Determine the maximum value for scaling: use customMax if set; otherwise use maxPayment with cushion
+      const maxVal = (customMax > 0 ? customMax : (maxPayment > 0 ? maxPayment * 1.2 : 1));
+
+      // Draw axes
+      ctx.beginPath();
+      ctx.moveTo(marginLeft, 20);
+      ctx.lineTo(marginLeft, 20 + chartHeight);
+      ctx.lineTo(marginLeft + chartWidth, 20 + chartHeight);
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Y-axis ticks and labels
+      const numTicks = 5;
+      for (let i = 0; i <= numTicks; i++) {
+        const yValue = maxVal * i / numTicks;
+        const yPos = 20 + chartHeight - (yValue / maxVal) * chartHeight;
+        ctx.beginPath();
+        ctx.moveTo(marginLeft - 5, yPos);
+        ctx.lineTo(marginLeft, yPos);
+        ctx.stroke();
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'right';
+        ctx.fillText(yValue.toFixed(0), marginLeft - 10, yPos + 4);
+      }
+
+      // No bars to draw if there are no sets
+      if (sets.length === 0) {
+        return;
+      }
+
+      // Calculate bar widths and spacing
+      const barGapRatio = 0.4;
+      const totalBarUnits = sets.length + barGapRatio * (sets.length + 1);
+      const barUnitWidth = chartWidth / totalBarUnits;
+      const barWidth = barUnitWidth;
+      let currentX = marginLeft + barUnitWidth * barGapRatio;
+
+      sets.forEach((setObj, idx) => {
+        const payment = setObj.payment;
+        const barHeight = (payment / maxVal) * chartHeight;
+        const barY = 20 + chartHeight - barHeight;
+
+        // Draw bar
+        ctx.fillStyle = setObj.color;
+        ctx.fillRect(currentX, barY, barWidth, barHeight);
+
+        // Draw payment value on top of bar
+        ctx.fillStyle = '#000';
+        ctx.font = '14px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(payment.toFixed(0), currentX + barWidth / 2, barY - 5);
+
+        // Draw parameters inside bar: principal, rate, term
+        ctx.save();
+        // Use white text for better contrast
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '10px Arial';
+        ctx.textAlign = 'center';
+        const innerLines = [];
+        // Compose parameter strings with thousands separators
+        innerLines.push('本金:' + setObj.principal.toLocaleString());
+        innerLines.push('利率:' + (setObj.rate * 100).toFixed(2) + '%');
+        innerLines.push('年期:' + setObj.term);
+        const lineHeight = 12;
+        // Starting y position roughly centered in bar
+        const totalHeight = lineHeight * innerLines.length;
+        let startY = barY + (barHeight - totalHeight) / 2 + 10; // add small offset
+        innerLines.forEach(function(line) {
+          // Only draw if there is enough height; guard to prevent text overflow when bars are very small
+          if (barHeight > totalHeight) {
+            ctx.fillText(line, currentX + barWidth / 2, startY);
+            startY += lineHeight;
+          }
+        });
+        ctx.restore();
+
+        // Draw set label beneath bar using scheme name
+        ctx.font = '13px Arial';
+        ctx.fillStyle = setObj.color;
+        ctx.fillText(setObj.name, currentX + barWidth / 2, 20 + chartHeight + 25);
+
+        // Advance position for next bar
+        currentX += barWidth * (1 + barGapRatio);
+      });
+    }
+
+    // Add a new scenario set with sliders and labels
+    function addSet(initialPrincipal = 8000000, initialRate = 0.029, initialTerm = 20) {
+      const index = sets.length;
+      const color = colors[index % colors.length];
+      // Initialize a new set object, including a default name
+      const setObj = {
+        principal: initialPrincipal,
+        rate: initialRate,
+        term: initialTerm,
+        payment: computeMonthlyPayment(initialPrincipal, initialRate, initialTerm),
+        color: color,
+        name: '方案 ' + (index + 1)
+      };
+      sets.push(setObj);
+
+      // Update global maxPayment if this payment is greater
+      if (setObj.payment > maxPayment) {
+        maxPayment = setObj.payment;
+      }
+
+      // Build DOM elements for this set
+      const container = document.getElementById('sets-container');
+      const setDiv = document.createElement('div');
+      setDiv.className = 'slider-container';
+      setDiv.style.borderLeft = '4px solid ' + color;
+      setDiv.style.paddingLeft = '6px';
+      setDiv.style.marginBottom = '20px';
+      setDiv.style.marginRight = '20px';
+
+      // Header (displays the scheme name in color)
+      const header = document.createElement('div');
+      header.style.fontWeight = 'bold';
+      header.style.color = color;
+      header.style.marginBottom = '8px';
+      header.textContent = setObj.name;
+      setDiv.appendChild(header);
+
+      // Name input
+      const nameLabel = document.createElement('label');
+      nameLabel.textContent = '方案名稱: ';
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.value = setObj.name;
+      nameInput.style.width = '120px';
+      nameInput.addEventListener('input', function() {
+        setObj.name = this.value || ('方案 ' + (index + 1));
+        header.textContent = setObj.name;
+        drawChart();
+      });
+      nameLabel.appendChild(nameInput);
+      setDiv.appendChild(nameLabel);
+      setDiv.appendChild(document.createElement('br'));
+
+      // Principal label and value display
+      const principalLabel = document.createElement('label');
+      principalLabel.textContent = '本金 (元): ';
+      const principalValSpan = document.createElement('span');
+      principalValSpan.className = 'value-display';
+      principalValSpan.textContent = initialPrincipal.toLocaleString();
+      principalLabel.appendChild(principalValSpan);
+      setDiv.appendChild(principalLabel);
+      setDiv.appendChild(document.createElement('br'));
+
+      // Principal slider
+      const principalSlider = document.createElement('input');
+      principalSlider.type = 'range';
+      principalSlider.min = '1000000';
+      principalSlider.max = '20000000';
+      principalSlider.step = '100000';
+      principalSlider.value = initialPrincipal;
+      setDiv.appendChild(principalSlider);
+
+      // Numeric input for principal
+      const principalInput = document.createElement('input');
+      principalInput.type = 'number';
+      principalInput.min = '1000000';
+      principalInput.max = '20000000';
+      principalInput.step = '100000';
+      principalInput.value = initialPrincipal;
+      principalInput.style.width = '100px';
+      setDiv.appendChild(principalInput);
+      setDiv.appendChild(document.createElement('br'));
+
+      // Rate label and value display
+      const rateLabel = document.createElement('label');
+      rateLabel.textContent = '年利率: ';
+      const rateValSpan = document.createElement('span');
+      rateValSpan.className = 'value-display';
+      rateValSpan.textContent = (initialRate * 100).toFixed(2) + '%';
+      rateLabel.appendChild(rateValSpan);
+      setDiv.appendChild(rateLabel);
+      setDiv.appendChild(document.createElement('br'));
+
+      // Rate slider (decimal between 0.001 and 0.1)
+      const rateSlider = document.createElement('input');
+      rateSlider.type = 'range';
+      rateSlider.min = '0.001';
+      rateSlider.max = '0.1';
+      rateSlider.step = '0.0001';
+      rateSlider.value = initialRate;
+      setDiv.appendChild(rateSlider);
+
+      // Numeric input for rate (percentage)
+      const rateInput = document.createElement('input');
+      rateInput.type = 'number';
+      rateInput.min = '0.1';
+      rateInput.max = '10';
+      rateInput.step = '0.01';
+      rateInput.value = (initialRate * 100).toFixed(2);
+      rateInput.style.width = '70px';
+      setDiv.appendChild(rateInput);
+      setDiv.appendChild(document.createElement('br'));
+
+      // Term label and value display
+      const termLabel = document.createElement('label');
+      termLabel.textContent = '年期: ';
+      const termValSpan = document.createElement('span');
+      termValSpan.className = 'value-display';
+      termValSpan.textContent = initialTerm.toString();
+      termLabel.appendChild(termValSpan);
+      setDiv.appendChild(termLabel);
+      setDiv.appendChild(document.createElement('br'));
+
+      // Term slider
+      const termSlider = document.createElement('input');
+      termSlider.type = 'range';
+      termSlider.min = '1';
+      termSlider.max = '40';
+      termSlider.step = '1';
+      termSlider.value = initialTerm;
+      setDiv.appendChild(termSlider);
+
+      // Numeric input for term
+      const termInput = document.createElement('input');
+      termInput.type = 'number';
+      termInput.min = '1';
+      termInput.max = '40';
+      termInput.step = '1';
+      termInput.value = initialTerm;
+      termInput.style.width = '50px';
+      setDiv.appendChild(termInput);
+
+      // Append the setDiv to container
+      container.appendChild(setDiv);
+
+      // Update function when sliders change
+      function updateSet() {
+        // Sync set values from sliders
+        setObj.principal = parseFloat(principalSlider.value);
+        setObj.rate = parseFloat(rateSlider.value);
+        setObj.term = parseFloat(termSlider.value);
+        setObj.payment = computeMonthlyPayment(setObj.principal, setObj.rate, setObj.term);
+
+        // Update display spans
+        principalValSpan.textContent = setObj.principal.toLocaleString();
+        rateValSpan.textContent = (setObj.rate * 100).toFixed(2) + '%';
+        termValSpan.textContent = setObj.term.toString();
+
+        // Update numeric inputs to reflect current values
+        principalInput.value = setObj.principal;
+        rateInput.value = (setObj.rate * 100).toFixed(2);
+        termInput.value = setObj.term;
+
+        // Update maxPayment if necessary
+        if (setObj.payment > maxPayment) {
+          maxPayment = setObj.payment;
+        }
+        drawChart();
+      }
+
+      // When numeric inputs change, update the sliders and set
+      function updateFromInputs() {
+        // Principal
+        const pVal = parseFloat(principalInput.value);
+        if (!isNaN(pVal)) {
+          principalSlider.value = pVal;
+        }
+        // Rate (as percent)
+        const rVal = parseFloat(rateInput.value);
+        if (!isNaN(rVal)) {
+          // Convert to decimal for slider
+          const decimalRate = rVal / 100;
+          rateSlider.value = decimalRate;
+        }
+        // Term
+        const tVal = parseFloat(termInput.value);
+        if (!isNaN(tVal)) {
+          termSlider.value = tVal;
+        }
+        updateSet();
+      }
+
+      // Attach event listeners
+      principalSlider.addEventListener('input', updateSet);
+      rateSlider.addEventListener('input', updateSet);
+      termSlider.addEventListener('input', updateSet);
+      principalInput.addEventListener('input', updateFromInputs);
+      rateInput.addEventListener('input', updateFromInputs);
+      termInput.addEventListener('input', updateFromInputs);
+
+      // Initially draw chart including new set
+      drawChart();
+    }
+
+    // When the document is ready, add the initial set
+    document.addEventListener('DOMContentLoaded', function() {
+      addSet();
+    });
+
+    // Handle Add Set button click to create another scenario
+    document.getElementById('add-set-btn').addEventListener('click', function() {
+      addSet();
+    });
+  </script>
+</body>
+</html>
